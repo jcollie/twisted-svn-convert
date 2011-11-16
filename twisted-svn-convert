@@ -1,0 +1,352 @@
+#!/usr/bin/python
+
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+from twisted.python import log
+from twisted.internet import protocol
+from twisted.internet import reactor
+from twisted.internet import defer
+import sys
+import re
+import os
+import hashlib
+
+central_git_repository = 'git@github.com:jcollie/twisted.git'
+base_svn_url = 'svn://svn.twistedmatrix.com/svn/Twisted'
+base_directory = '/home/jcollie/dev/twisted-svn-clone/svn'
+svn_search_directories = ['branches',
+                          'branches/releases',
+                          'branches/releases/conch',
+                          'branches/releases/mail',
+                          'branches/releases/names',
+                          'branches/releases/words',
+                          'tags',
+                          'tags/releases',
+                          'tags/releases/pb2']
+
+def error(err):
+    if reactor.running:
+        log.err(err)
+        reactor.stop()
+
+class SvnLsProtocol(protocol.ProcessProtocol):
+    def __init__(self, reactor, base_svn_url, directory, sem, dq):
+        self.reactor = reactor
+        self.base_svn_url = base_svn_url
+        self.directory = directory
+        self.sem = sem
+        self.dq = dq
+        
+        self.url = '%s/%s' % (self.base_svn_url, self.directory)
+        self.data = ''
+        self.versions = []
+
+        d = self.sem.acquire()
+        d.addCallback(self.start)
+        d.addErrback(error)
+
+    def start(self, result):
+        self.reactor.spawnProcess(self,
+                                  '/usr/bin/svn',
+                                  ['svn',
+                                   'ls',
+                                   self.url],
+                                  {})
+
+    def connectionMade(self):
+        log.msg('"svn ls %s" starting up' % self.url)
+
+    def outReceived(self, data):
+        self.data += data
+        index = self.data.find('\n')
+        while index >= 0:
+            line = self.data[:index]
+            self.data = self.data[index+1:]
+            index = self.data.find('\n')
+            if line.endswith('/'):
+                self.dq.put(os.path.join(self.directory, line[:-1]))
+
+    def errReceived(self, data):
+        log.err(data)
+        pass
+
+    def inConnectionLost(self):
+        pass
+
+    def outConnectionLost(self):
+        pass
+
+    def processEnded(self, status_object):
+        log.msg('svn ls %s ended' % self.url)
+        self.sem.release()
+
+class GitInitProtocol(protocol.ProcessProtocol):
+    def __init__(self, reactor, central_git_repository, base_svn_url, base_directory, directory, sem, dq):
+        self.reactor = reactor
+        self.central_git_repository = central_git_repository
+        self.base_svn_url = base_svn_url
+        self.base_directory = base_directory
+        self.directory = directory
+        self.sem = sem
+        self.dq = dq
+
+        self.path = os.path.join(base_directory, hashlib.new('sha224', directory).hexdigest())
+
+        if self.directory == 'trunk':
+            self.remote_branch = 'master'
+        else:
+            self.remote_branch = self.directory
+
+        if os.path.exists(self.path):
+            self.dq.put(self.directory)
+
+        else:
+            d = self.sem.acquire()
+            d.addCallback(self.start)
+            d.addErrback(error)
+
+    def start(self, result):
+        self.reactor.spawnProcess(self,
+                                  '/usr/bin/git',
+                                  ['git',
+                                   '--bare',
+                                   '--git-dir=%s' % self.path,
+                                   'init'],
+                                  {})
+
+    def connectionMade(self):
+        log.msg('initializing %s' % self.path)
+
+    def outReceived(self, data):
+        for line in data.rstrip().split('\n'):
+            log.msg(line)
+
+    def errReceived(self, data):
+        for line in data.rstrip().split('\n'):
+            log.msg(line)
+
+    def inConnectionLost(self):
+        pass
+
+    def outConnectionLost(self):
+        pass
+
+    def processEnded(self, status_object):
+        f = file(os.path.join(self.path, 'config'), 'w')
+        f.write('[core]\n')
+        f.write('        repositoryformatversion = 0\n')
+        f.write('        filemode = true\n')
+        f.write('        bare = true\n')
+        f.write('        logallrefupdates = true\n')
+        f.write('[remote "origin"]\n')
+        f.write('        url = %s\n' % self.central_git_repository)
+        f.write('        fetch = +refs/remotes/%s:refs/remotes/origin/%s\n' % (self.directory, self.remote_branch))
+        f.write('[svn-remote "svn"]\n')
+        f.write('        url = %s\n' % self.base_svn_url)
+        f.write('        fetch = %s:refs/remotes/%s\n' % (self.directory, self.directory))
+        f.close()
+
+        self.dq.put(self.directory)
+        self.sem.release()
+
+class GitSvnFetchProtocol(protocol.ProcessProtocol):
+    def __init__(self, reactor, base_svn_url, base_directory, directory, sem, dq):
+        self.reactor = reactor
+        self.base_svn_url = base_svn_url
+        self.base_directory = base_directory
+        self.directory = directory
+        self.sem = sem
+        self.dq = dq
+
+        self.path = os.path.join(base_directory, hashlib.new('sha224', directory).hexdigest())
+
+        d = self.sem.acquire()
+        d.addCallback(self.start)
+        d.addErrback(error)
+
+    def start(self, reasult):
+        self.reactor.spawnProcess(self,
+                                  '/usr/bin/git',
+                                  ['git',
+                                   '--bare',
+                                   '--git-dir=%s' % self.path,
+                                   'svn',
+                                   'fetch'],
+                                  {})
+        
+    def connectionMade(self):
+        log.msg('git svn fetch of %s starting up' % self.directory)
+
+    def outReceived(self, data):
+        for line in data.rstrip().split('\n'):
+            log.msg(line)
+
+    def errReceived(self, data):
+        for line in data.rstrip().split('\n'):
+            log.msg(line)
+
+    def inConnectionLost(self):
+        pass
+
+    def outConnectionLost(self):
+        pass
+
+    def processEnded(self, status_object):
+        self.dq.put(self.directory)
+        self.sem.release()
+
+class GitPushProtocol(protocol.ProcessProtocol):
+    def __init__(self, reactor, base_directory, directory, sem, dq):
+        self.reactor = reactor
+        self.base_directory = base_directory
+        self.directory = directory
+        self.sem = sem
+        self.dq = dq
+
+        self.path = os.path.join(base_directory, hashlib.new('sha224', directory).hexdigest())
+
+        if self.directory == 'trunk':
+            self.remote_branch = 'master'
+        else:
+            self.remote_branch = self.directory
+
+        d = self.sem.acquire()
+        d.addCallback(self.start)
+        d.addErrback(error)
+
+    def start(self, reasult):
+        self.reactor.spawnProcess(self,
+                                  '/usr/bin/git',
+                                  ['git',
+                                   '--bare',
+                                   '--git-dir=%s' % self.path,
+                                   'push',
+                                   'origin',
+                                   'refs/remotes/%s:refs/heads/%s' % (self.directory, self.remote_branch)],
+                                  {})
+        
+    def connectionMade(self):
+        log.msg('git push of %s starting up' % self.directory)
+
+    def outReceived(self, data):
+        for line in data.rstrip().split('\n'):
+            log.msg(line)
+
+    def errReceived(self, data):
+        for line in data.rstrip().split('\n'):
+            log.msg(line)
+
+    def inConnectionLost(self):
+        pass
+
+    def outConnectionLost(self):
+        pass
+
+    def processEnded(self, status_object):
+        log.msg('git push of %s ending' % self.directory)
+        self.dq.put(self.directory)
+        self.sem.release()
+
+class Controller(object):
+    def __init__(self, reactor, central_git_repository, base_svn_url, base_directory, svn_search_directories):
+        self.reactor = reactor
+        self.central_git_repository = central_git_repository
+        self.base_svn_url = base_svn_url
+        self.base_directory = base_directory
+        self.svn_search_directories = svn_search_directories
+
+        self.count = 0
+
+        self.ls_sem = defer.DeferredSemaphore(2)
+        self.init_sem = defer.DeferredSemaphore(2)
+        self.fetch_sem = defer.DeferredSemaphore(5)
+        self.push_sem = defer.DeferredSemaphore(1)
+
+        self.ls_dq = defer.DeferredQueue()
+        self.init_dq = defer.DeferredQueue()
+        self.fetch_dq = defer.DeferredQueue()
+        self.push_dq = defer.DeferredQueue()
+        self.finished_dq = defer.DeferredQueue()
+
+        self.ls_dq.put('trunk')
+
+        self.getNextDirectoryFromLsQueue()
+        self.getNextDirectoryFromInitQueue()
+        self.getNextDirectoryFromFetchQueue()
+        self.getNextDirectoryFromPushQueue()
+        self.getNextDirectoryFromFinishedQueue()
+
+        for directory in self.svn_search_directories:
+            slp = SvnLsProtocol(self.reactor, self.base_svn_url, directory, self.ls_sem, self.ls_dq)
+
+    def getNextDirectoryFromLsQueue(self):
+        d = self.ls_dq.get()
+        d.addCallback(self.processDirectoryFromLsQueue)
+        d.addErrback(error)
+
+    def processDirectoryFromLsQueue(self, directory):
+        log.msg('L %s' % directory)
+        if directory not in self.svn_search_directories:
+            self.count += 1
+            self.init_dq.put(directory)
+        self.getNextDirectoryFromLsQueue()
+
+    def getNextDirectoryFromInitQueue(self):
+        d = self.init_dq.get()
+        d.addCallback(self.processDirectoryFromInitQueue)
+        d.addErrback(error)
+
+    def processDirectoryFromInitQueue(self, directory):
+        log.msg('I %s' % directory)
+        gip = GitInitProtocol(self.reactor, self.central_git_repository, self.base_svn_url, self.base_directory, directory, self.init_sem, self.fetch_dq)
+        self.getNextDirectoryFromInitQueue()
+
+    def getNextDirectoryFromFetchQueue(self):
+        d = self.fetch_dq.get()
+        d.addCallback(self.processDirectoryFromFetchQueue)
+        d.addErrback(error)
+
+    def processDirectoryFromFetchQueue(self, directory):
+        log.msg('F %s' % directory)
+        gsfp = GitSvnFetchProtocol(self.reactor, self.base_svn_url, self.base_directory, directory, self.fetch_sem, self.push_dq)
+        self.getNextDirectoryFromFetchQueue()
+
+    def getNextDirectoryFromPushQueue(self):
+        d = self.push_dq.get()
+        d.addCallback(self.processDirectoryFromPushQueue)
+        d.addErrback(error)
+
+    def processDirectoryFromPushQueue(self, directory):
+        log.msg('P %s' % directory)
+        gpp = GitPushProtocol(self.reactor, self.base_directory, directory, self.push_sem, self.finished_dq)
+        self.getNextDirectoryFromPushQueue()
+
+    def getNextDirectoryFromFinishedQueue(self):
+        d = self.finished_dq.get()
+        d.addCallback(self.processDirectoryFromFinishedQueue)
+        d.addErrback(error)
+
+    def processDirectoryFromFinishedQueue(self, directory):
+        log.msg('F %s' % directory)
+        self.count -= 1
+        if self.count <= 0:
+            self.reactor.stop()
+            return
+        self.getNextDirectoryFromFinishedQueue()
+        
+log.startLogging(sys.stdout)
+
+c = Controller(reactor, central_git_repository, base_svn_url, base_directory, svn_search_directories)
+
+reactor.run()

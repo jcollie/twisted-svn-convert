@@ -1,0 +1,73 @@
+acapnotic
+alus
+amacleod
+andy
+anthony
+bruce
+carmstro
+cce
+chris
+cyli
+davep
+dialtone = Valentino Volonghi <dialtone@gmail.com>
+dizzyd
+dp
+dreid
+etrepum
+exarkun = exarkun@twistedmatrix.com
+fijal
+foom = James Y Knight <foom@fuhm.net>
+glyph = Glyph Lefkowitz <glyph@twistedmatrix.com>
+habnabit
+itamarst = Itamar Turner-Trauring <itamar@itamarst.org>
+jafo
+jasbahr
+jelkner
+jerub
+jesstess = Jessica McKellar <jessica.mckellar@gmail.com>
+jh
+jkakar = Jamu Kakar <jkakar@kakar.ca>
+jml
+jonathanj
+justinj
+khorn = kevin.horn@gmail.com
+krz
+lewq
+lvh = Laurens Van Houtven <_@lvh.cc>
+mary
+mesozoic
+mg
+mithrandi = Tristan Seligmann <mithrandi@mithrandi.net>
+moonfallen
+moshez
+mwh
+nafai
+nbm
+oubiwann
+pahan
+pb
+peaker
+phed
+radix = Christopher Armstrong <radix@twistedmatrix.com>
+ralphm
+releaseman
+rob
+sam
+screwtape = Tim Allen <screwtape@froup.com>
+sean = Sean Ochoa <sean.m.ochoa@gmail.com>
+sjj
+skreech
+slyphon
+spiv
+stephen
+swordangel
+tenth
+teratorn
+therve = Thomas Hervé <therve@free.fr>
+thijs = Thijs Triemstra <lists@collab.nl>
+tv
+warner
+washort
+wsanchez
+z3p
+zooko = Zooko O'Whielacronx <zooko@zooko.com>
